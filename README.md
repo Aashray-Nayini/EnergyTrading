@@ -5,7 +5,7 @@ EnergyTrading package is aimed at providing multi-market power trading strategie
 Dependencies
 ---------------------------------
 1. A list of libraries needed to run the code is saved in requirements.txt file. Follow the instructions from the section below to install them on your virtual environment
-2. An api key to access data from entso-e transparency platform. Following the steps in the [official documentation](https://transparency.entsoe.eu/content/static_content/Static%20content/web%20api/Guide.html?ref=datons.ai#_authentication_and_authorisation), you can register on the [ENTSO-E page](https://transparency.entsoe.eu/?ref=datons.ai), and then you need to send an email to transparency@entsoe.eu with the subject “Restful API access”. After procuring your key, save it in a .env file in this package with a name "API_KEY".
+2. An api key to access data from entso-e transparency platform. Following the steps in the [official documentation](https://transparency.entsoe.eu/content/static_content/Static%20content/web%20api/Guide.html?ref=datons.ai#_authentication_and_authorisation), you can register on the [ENTSO-E page](https://transparency.entsoe.eu/?ref=datons.ai), and then you need to send an email to transparency@entsoe.eu with the subject “Restful API access”. After procuring your key, save it in a .env file in this package with a name "API_KEY_ENTSOE".
 
 
 Virtual Environment and Installations
