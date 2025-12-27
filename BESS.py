@@ -15,10 +15,10 @@ import panel.widgets as pnw
 from requests.exceptions import HTTPError
 
 load_dotenv()  # loads .env into environment variables
-API_KEY = os.getenv("API_KEY")
+API_KEY_ENTSOE = os.getenv("API_KEY_ENTSOE")
 
 # Initialize the request protocol
-CLIENT = EntsoePandasClient(api_key=API_KEY)
+CLIENT = EntsoePandasClient(api_key=API_KEY_ENTSOE)
 
 # Function to print out next day in string
 def next_day_str(date_str: str) -> str:
@@ -158,8 +158,8 @@ class BESS_trading_strategy:
             if len(g) > 1 and (g.index[1] - g.index[0]).seconds / 60 == 60:
                 # 1-hour data → resample to 15-min with mid-hour alignment
                 g_fixed = (
-                    g.resample("15min").interpolate("linear").shift(freq="30min")
-                    .reindex(pd.date_range(day, periods=96, freq="15min", tz=g.index.tz), method="nearest")
+                    #g.resample("15min").interpolate("linear").shift(freq="30min").reindex(pd.date_range(day, periods=96, freq="15min", tz=g.index.tz), method="nearest")
+                    g.resample("15min").ffill().reindex(pd.date_range(day, periods=96, freq="15min", tz=g.index.tz), method="ffill")
                 )
                 df_fixed_list.append(g_fixed)
             else:
@@ -951,7 +951,7 @@ plot_button.visible = False
 # --- Combine all panels
 # ---------------------------------------------------------------------
 dashboard = pn.Column(
-    pn.pane.Markdown("## ⚙️ BESS Trading Strategy Interactive Dashboard"),
+    pn.pane.Markdown("## ⚙️ BESS Trading Strategy - Interactive Dashboard"),
     row1,
     row2,
     asset_title,
