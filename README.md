@@ -5,7 +5,7 @@ EnergyTrading package is aimed at providing multi-market power trading strategie
 Dependencies
 ---------------------------------
 1. A list of libraries needed to run the code is saved in requirements.txt file. Follow the instructions from the section below to install them on your virtual environment
-2. An api key to access data from entso-e transparency platform. Following the steps in the [official documentation](https://transparency.entsoe.eu/content/static_content/Static%20content/web%20api/Guide.html?ref=datons.ai#_authentication_and_authorisation), you can register on the [ENTSO-E page](https://transparency.entsoe.eu/?ref=datons.ai), and then you need to send an email to transparency@entsoe.eu with the subject “Restful API access”. After procuring your key, save it in a .env file in this package with a name "API_KEY_ENTSOE".
+2. An api key to access data from entso-e transparency platform. Following the steps in the [official documentation](https://transparencyplatform.zendesk.com/hc/en-us/articles/12845911031188-How-to-get-security-token), you can register on the [ENTSO-E page](https://transparency.entsoe.eu/?ref=datons.ai), and then you need to send an email to transparency@entsoe.eu with the subject “Restful API access”. After procuring your key, save it in a .env file in this package with a name "API_KEY_ENTSOE". For more info, refer to technical [API documentation](https://documenter.getpostman.com/view/7009892/2s93JtP3F6), python client for the data ([entsoe-py](https://github.com/EnergieID/entsoe-py)), [help page](https://transparencyplatform.zendesk.com/hc/en-us/articles/17260622859412-Transparency-Platform-Help-page) and interactive [data portal](https://transparency.entsoe.eu/).
 
 
 Virtual Environment and Installations
@@ -24,6 +24,14 @@ It is recommended to make a virtual environment and install the required package
 3. Install the required packages from the `requirements.txt` file (make sure to give the full path of this file):
 
     `pip install -r path/to/requirements.txt`
+
+After successfully installing the necessary packages and aquiring the API key(s), the code can be run.
+
+Navigate to the repository path from the terminal:
+    `cd path/to/repository`
+
+Then run the code using:
+    `python BESS.py`
 
 Interactive Trading Dashboard
 ---------------------------------
