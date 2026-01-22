@@ -152,6 +152,7 @@ class BESS_trading_strategy:
 
         # DA Prices (EUR/MWh)
         df_lambda_DA = getPriceDA(country='FR', start=pd.Timestamp(self.start_date, tz="Europe/Paris"), end=pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["day-ahead"].loc[self.start_date: self.end_date]
+
         # Downsample (be linear interpolation) the DA prices to 15-mins (applies to befre 1st Oct 2025)
         df_fixed_list = []
         for day, g in df_lambda_DA.groupby(df_lambda_DA.index.normalize()):
@@ -167,6 +168,7 @@ class BESS_trading_strategy:
 
         # Concatenate all daily segments back together
         df_lambda_DA = pd.concat(df_fixed_list).sort_index()
+
 
         # Big M
         self.M = 100000000
@@ -235,8 +237,11 @@ class BESS_trading_strategy:
         
         return
 
-    def solve(self, quality: bool = False):
+    def solve(self, quality: bool = False, risk: bool = False, alpha_risk: float = 1, beta_risk: float = 0):
         self.quality = quality
+        self.risk = risk
+        self.alpha_risk = alpha_risk
+        self.beta_risk = beta_risk
         self.solve_status = "Normal"
 
         # Running the correct model for all the dates in the range
@@ -287,6 +292,8 @@ class BESS_trading_strategy:
         elif self.scheme == "Stochastic":
             # Arrays to save the optimal values
             self.Obj_arr = np.zeros(len(pd.date_range(self.start_date, self.end_date)))
+            self.zeta_arr = np.array([])
+            self.nu_arr = np.empty((len(pd.date_range(self.start_date, self.end_date)), 0))
             self.P_DA_arr = np.array([])
             self.c_up_arr = np.array([])
             self.c_dn_arr = np.array([])
@@ -314,16 +321,21 @@ class BESS_trading_strategy:
                 # Running the model
                 if "FCR-D" in self.markets:
                     if self.quality:
-                        self.Obj_arr[i], P_DA_o, P_act_o, c_up_o, c_dn_o, SOC_o = self.cross_validate_STC_FCRD_DA_IMB(date_trade)
+                        self.Obj_arr[i], zeta_o, nu_o, P_DA_o, P_act_o, c_up_o, c_dn_o, SOC_o = self.cross_validate_STC_FCRD_DA_IMB(date_trade)
                     else:
-                        self.Obj_arr[i], P_DA_o, P_act_o, c_up_o, c_dn_o, SOC_o = self.STC_FCRD_DA_IMB_daily(date_trade, self.W, self.lambda_Stc_FCR_D_up, self.lambda_Stc_FCR_D_dn, self.lambda_Stc_DA, self.lambda_Stc_im, self.r_Stc_up, self.r_Stc_dn)
+                        self.Obj_arr[i], zeta_o, nu_o, P_DA_o, P_act_o, c_up_o, c_dn_o, SOC_o = self.STC_FCRD_DA_IMB_daily(date_trade, self.W, self.lambda_Stc_FCR_D_up, self.lambda_Stc_FCR_D_dn, self.lambda_Stc_DA, self.lambda_Stc_im, self.r_Stc_up, self.r_Stc_dn)
                     self.c_up_arr = np.append(self.c_up_arr, c_up_o)
                     self.c_dn_arr = np.append(self.c_dn_arr, c_dn_o)
                 elif self.markets == "DA with imbalance":
                     if self.quality:
-                        self.Obj_arr[i], P_DA_o, P_act_o, SOC_o = self.cross_validate_STC_FCRD_DA_IMB(date_trade)
+                        self.Obj_arr[i], zeta_o, nu_o, P_DA_o, P_act_o, SOC_o = self.cross_validate_STC_FCRD_DA_IMB(date_trade)
                     else:
-                        self.Obj_arr[i], P_DA_o, P_act_o, SOC_o = self.STC_FCRD_DA_IMB_daily(date_trade, self.W, self.lambda_Stc_FCR_D_up, self.lambda_Stc_FCR_D_dn, self.lambda_Stc_DA, self.lambda_Stc_im, self.r_Stc_up, self.r_Stc_dn)
+                        self.Obj_arr[i], zeta_o, nu_o, P_DA_o, P_act_o, SOC_o = self.STC_FCRD_DA_IMB_daily(date_trade, self.W, self.lambda_Stc_FCR_D_up, self.lambda_Stc_FCR_D_dn, self.lambda_Stc_DA, self.lambda_Stc_im, self.r_Stc_up, self.r_Stc_dn)
+                self.zeta_arr =  np.append(self.zeta_arr, zeta_o)
+                if self.quality:
+                    self.nu_arr = np.hstack((self.nu_arr, nu_o.reshape(1,int(self.k*self.W))))
+                else:
+                    self.nu_arr = np.hstack((self.nu_arr, nu_o.reshape(1,self.W)))
                 self.P_DA_arr =  np.append(self.P_DA_arr, P_DA_o)
                 self.P_act_arr = np.hstack((self.P_act_arr, P_act_o))
                 self.SOC_arr = np.hstack((self.SOC_arr, SOC_o))
@@ -349,9 +361,9 @@ class BESS_trading_strategy:
 
             # Solve optimization on seen (or insample) scenarios
             if "FCR-D" in self.markets:
-                Obj_exp_in, P_DA_in_o, P_act_in_o, c_up_in_o, c_dn_in_o, SOC_in_o = self.STC_FCRD_DA_IMB_daily(date_trade, self.fold_size, self.lambda_Stc_FCR_D_up_in, self.lambda_Stc_FCR_D_dn_in, self.lambda_Stc_DA_in, self.lambda_Stc_im_in, self.r_Stc_up_in, self.r_Stc_dn_in)
+                Obj_exp_in, zeta_in_o, nu_in_o, P_DA_in_o, P_act_in_o, c_up_in_o, c_dn_in_o, SOC_in_o = self.STC_FCRD_DA_IMB_daily(date_trade, self.fold_size, self.lambda_Stc_FCR_D_up_in, self.lambda_Stc_FCR_D_dn_in, self.lambda_Stc_DA_in, self.lambda_Stc_im_in, self.r_Stc_up_in, self.r_Stc_dn_in)
             elif self.markets == "DA with imbalance":
-                Obj_exp_in, P_DA_in_o, P_act_in_o, SOC_in_o = self.STC_FCRD_DA_IMB_daily(date_trade, self.fold_size, self.lambda_Stc_FCR_D_up_in, self.lambda_Stc_FCR_D_dn_in, self.lambda_Stc_DA_in, self.lambda_Stc_im_in, self.r_Stc_up_in, self.r_Stc_dn_in)
+                Obj_exp_in, zeta_in_o, nu_in_o, P_DA_in_o, P_act_in_o, SOC_in_o = self.STC_FCRD_DA_IMB_daily(date_trade, self.fold_size, self.lambda_Stc_FCR_D_up_in, self.lambda_Stc_FCR_D_dn_in, self.lambda_Stc_DA_in, self.lambda_Stc_im_in, self.r_Stc_up_in, self.r_Stc_dn_in)
 
             # Compute out-of-sample average revenue
             if "FCR-D" in self.markets:
@@ -368,6 +380,8 @@ class BESS_trading_strategy:
             if gap < best_gap:
                 best_gap = gap
                 Obj_o = Obj_exp_in
+                zeta_o = zeta_in_o
+                nu_o = nu_in_o
                 P_DA_o = P_DA_in_o
                 P_act_o = P_act_in_o
                 if "FCR-D" in self.markets:
@@ -378,9 +392,9 @@ class BESS_trading_strategy:
 
         # Return values
         if "FCR-D" in self.markets:
-            return Obj_o, P_DA_o, P_act_o, c_up_o, c_dn_o, SOC_o
+            return Obj_o, zeta_o, nu_o, P_DA_o, P_act_o, c_up_o, c_dn_o, SOC_o
         elif self.markets == "DA with imbalance":
-            return Obj_o, P_DA_o, P_act_o, SOC_o
+            return Obj_o, zeta_o, nu_o, P_DA_o, P_act_o, SOC_o
 
     def FCRD_DA_IMB_daily(self, date_trade):
         # Initialize the solver
@@ -484,38 +498,51 @@ class BESS_trading_strategy:
             #y_up = [[solver.IntVar(0, 1, f"y_up[{t},{w}]") for w in range(W_local)] for t in range(self.T)]
             #y_dn = [[solver.IntVar(0, 1, f"y_dn[{t},{w}]") for w in range(W_local)] for t in range(self.T)]
         SOC = [[solver.NumVar(0, self.SOC_max, f"SOC[{t},{w}]") for w in range(W_local)] for t in range(self.T)]
+        z_rn = [solver.NumVar(-solver.infinity(), solver.infinity(), f"z_rn_{w}") for w in range(W_local)] # Risk neutral revenue function
+        zeta = solver.NumVar(-solver.infinity(), solver.infinity(), "zeta") # Value-at-Risk (VaR)
+        theta = [solver.IntVar(0, 1, f"theta_{w}") for w in range(W_local)] # auxillary binary variable for VaR calculation
+        nu = [solver.NumVar(0, solver.infinity(), f"nu_{w}") for w in range(W_local)] # shortfall from VaR at each scenario (will only take non-negative values)
+
 
         # Objective function
-        if "FCR-D" in self.markets:
+        if not self.risk:
             solver.Maximize(
-                solver.Sum(
-                    solver.Sum(
-                        (1/W_local) * (                                       # Equiprobable scenarios
-                              lambda_Stc_FCR_D_up_local[w,t] * c_up[t]
-                            + lambda_Stc_FCR_D_dn_local[w,t] * c_dn[t]
-                            + lambda_Stc_DA_local[w,t] * P_DA[t] / self.n_DA
-                            + lambda_Stc_im_local[w,t] * (P_act[t][w] - P_DA[t]) / self.n_im
-                        )
-                        for w in range(W_local)
-                    )
-                    for t in range(self.T)
-                )
+                (1/W_local) * solver.Sum(z_rn[w] for w in range(W_local))  # Equiprobable scenarios
             )
-        elif self.markets == "DA with imbalance":
+        else:
             solver.Maximize(
-                solver.Sum(
-                    solver.Sum(
-                        (1/W_local) * (                                       # Equiprobable scenarios
-                              lambda_Stc_DA_local[w,t] * P_DA[t] / self.n_DA
-                            + lambda_Stc_im_local[w,t] * (P_act[t][w] - P_DA[t]) / self.n_im
-                        )
-                        for w in range(W_local)
-                    )
-                    for t in range(self.T)
-                )
+                (1 - self.beta_risk) * (1/W_local) * solver.Sum(z_rn[w] for w in range(W_local))  # Equiprobable scenarios
+                + self.beta_risk * ( zeta - (1/(1-self.alpha_risk)) * (1/W_local) * solver.Sum(nu[w] for w in range(W_local)) )  # CVaR 
             )
+        
+        # Percentile setting for VaR
+        solver.Add( (1/W_local) * solver.Sum(theta[w] for w in range(W_local)) <= 1 - self.alpha_risk )
 
+        for w in range(W_local):
+            # Risk Neutral scenario-wise revenue
+            if "FCR-D" in self.markets:
+                solver.Add(z_rn[w] == solver.Sum((
+                                            lambda_Stc_FCR_D_up_local[w,t] * c_up[t]
+                                            + lambda_Stc_FCR_D_dn_local[w,t] * c_dn[t]
+                                            + lambda_Stc_DA_local[w,t] * P_DA[t] / self.n_DA
+                                            + lambda_Stc_im_local[w,t] * (P_act[t][w] - P_DA[t]) / self.n_im
+                                        ) for t in range(self.T)
+                                    )
+                                )
+            elif self.markets == "DA with imbalance":
+                solver.Add(z_rn[w] == solver.Sum((
+                                            lambda_Stc_DA_local[w,t] * P_DA[t] / self.n_DA
+                                            + lambda_Stc_im_local[w,t] * (P_act[t][w] - P_DA[t]) / self.n_im
+                                        ) for t in range(self.T)
+                                    )
+                                )
 
+            # VaR calculation by limits
+            solver.Add( zeta <= z_rn[w] + self.M*theta[w] )
+            
+            # Shortfall from VaR in each scenario
+            solver.Add( nu[w] >= zeta - z_rn[w] )
+        
         for t in range(self.T):
 
             if "FCR-D" in self.markets:
@@ -571,12 +598,16 @@ class BESS_trading_strategy:
             #y_up_o = np.array([[y_up[t][w].solution_value() for w in range(W_local)] for t in range(self.T)]).T  # noqa: N806
             #y_dn_o = np.array([[y_dn[t][w].solution_value() for w in range(W_local)] for t in range(self.T)]).T  # noqa: N806
         SOC_o = np.array([[SOC[t][w].solution_value() for w in range(W_local)] for t in range(self.T)]).T  # noqa: N80
-
+        zeta_o = zeta.solution_value()
+        nu_o = np.array([nu[w].solution_value() for w in range(W_local)])  # noqa: N806
+    
+        #print("VaR:", zeta_o)
+        self.solver = solver
         # Return values
         if "FCR-D" in self.markets:
-            return solver.Objective().Value(), P_DA_o, P_act_o, c_up_o, c_dn_o, SOC_o
+            return solver.Objective().Value(), zeta_o, nu_o, P_DA_o, P_act_o, c_up_o, c_dn_o, SOC_o
         elif self.markets == "DA with imbalance":
-            return solver.Objective().Value(), P_DA_o, P_act_o, SOC_o
+            return solver.Objective().Value(), zeta_o, nu_o, P_DA_o, P_act_o, SOC_o
 
     def revenue(self):
         if self.solve_status == "Not solved yet":
@@ -600,7 +631,11 @@ class BESS_trading_strategy:
             else:
                 self.rev_FCR_D = np.zeros(len(self.P_DA_arr))
             self.rev_DA = self.lambda_Stc_DA_full.mean(axis=0) * (self.P_DA_arr / self.n_DA)
-            self.rev_IM = self.lambda_Stc_im_full.mean(axis=0) * ((self.P_act_arr.mean(axis=0) - self.P_DA_arr) / self.n_im)
+            if self.quality:
+                self.rev_IM = self.lambda_Stc_im_full.mean(axis=0) * ((self.P_act_arr.mean(axis=0) - self.P_DA_arr) / self.n_im)
+                #self.rev_IM = (self.lambda_Stc_im_full * ((self.P_act_arr - self.P_DA_arr) / self.n_im)).mean(axis=0)
+            else:
+                self.rev_IM = (self.lambda_Stc_im_full * ((self.P_act_arr - self.P_DA_arr) / self.n_im)).mean(axis=0)
             self.PnL = self.rev_FCR_D +self.rev_DA + self.rev_IM
             if self.quality:
                 return print(f"Potential Revenue: €{np.sum(self.Obj_arr):,.2f} with a gap of {self.gap_KF_OSA:.2f}% between in and out samples")
@@ -768,11 +803,148 @@ class BESS_trading_strategy:
         ax.grid(True)
         ax.xaxis.set_major_locator(md.HourLocator(interval=2))
         ax.xaxis.set_major_formatter(FuncFormatter(date_hour_formatter))
-
         
         # Show plot
         plt.tight_layout()
         #plt.savefig("result_illustration_example", dpi=500)
+        return plt.gcf()
+    
+    def risk_analysis(self):
+        if not self.risk or self.beta_risk == 0:
+            return print("Risk neutral mode is selected in the parameters, change it to risk aware mode to run this function.")
+        if self.solve_status == "Not solved yet":
+            return print("Problem not solved yet: run the optimization problem using .solve()")
+        
+        beta_risk_original = self.beta_risk
+
+        self.beta_arr = np.arange(0,1.1,0.1)
+        rev_FCR_D_ra = np.zeros(len(self.beta_arr))
+        rev_DA_ra = np.zeros(len(self.beta_arr))
+        rev_IM_ra = np.zeros(len(self.beta_arr)) 
+        self.PnL_ra = np.zeros(len(self.beta_arr))
+        self.CVaR_arr = np.zeros(len(self.beta_arr))
+        
+        for i,beta in enumerate(self.beta_arr):
+            
+            self.beta_risk = beta
+
+            # Arrays to save the optimal values
+            zeta_arr_ra = np.array([])
+            nu_arr_ra = np.empty((len(pd.date_range(self.start_date, self.end_date)), 0))
+            P_DA_arr_ra = np.array([])
+            c_up_arr_ra = np.array([])
+            c_dn_arr_ra = np.array([])
+            if self.quality:
+                P_act_arr_ra = np.empty((int(self.k*self.W), 0))
+                SOC_arr_ra = np.empty((int(self.k*self.W), 0))
+            else:
+                P_act_arr_ra = np.empty((self.W, 0))
+                SOC_arr_ra = np.empty((self.W, 0))
+            
+            # Run for all the dates in the date range
+            for date_trade in pd.date_range(self.start_date, self.end_date):
+                date_trade = date_trade.strftime("%Y-%m-%d")
+                # Running the model
+                if "FCR-D" in self.markets:
+                    if self.quality:
+                        obj_ra, zeta_ra, nu_ra, P_DA_ra, P_act_ra, c_up_ra, c_dn_ra, SOC_ra = self.cross_validate_STC_FCRD_DA_IMB(date_trade)
+                    else:
+                        obj_ra, zeta_ra, nu_ra, P_DA_ra, P_act_ra, c_up_ra, c_dn_ra, SOC_ra = self.STC_FCRD_DA_IMB_daily(date_trade, self.W, self.lambda_Stc_FCR_D_up, self.lambda_Stc_FCR_D_dn, self.lambda_Stc_DA, self.lambda_Stc_im, self.r_Stc_up, self.r_Stc_dn)
+                    c_up_arr_ra = np.append(c_up_arr_ra, c_up_ra)
+                    c_dn_arr_ra = np.append(c_dn_arr_ra, c_dn_ra)
+                elif self.markets == "DA with imbalance":
+                    if self.quality:
+                        obj_ra, zeta_ra, nu_ra, P_DA_ra, P_act_ra, SOC_ra = self.cross_validate_STC_FCRD_DA_IMB(date_trade)
+                    else:
+                        obj_ra, zeta_ra, nu_ra, P_DA_ra, P_act_ra, SOC_ra = self.STC_FCRD_DA_IMB_daily(date_trade, self.W, self.lambda_Stc_FCR_D_up, self.lambda_Stc_FCR_D_dn, self.lambda_Stc_DA, self.lambda_Stc_im, self.r_Stc_up, self.r_Stc_dn)
+                zeta_arr_ra =  np.append(zeta_arr_ra, zeta_ra)
+                nu_arr_ra = np.hstack((nu_arr_ra, nu_ra.reshape(1,self.W)))
+                P_DA_arr_ra =  np.append(P_DA_arr_ra, P_DA_ra)
+                P_act_arr_ra = np.hstack((P_act_arr_ra, P_act_ra))
+                SOC_arr_ra = np.hstack((SOC_arr_ra, SOC_ra))
+
+            #print("zeta:",zeta_arr_ra)
+            #print("nu_arr_ra:",nu_arr_ra)
+            #print("P_DA_arr_ra:",P_DA_arr_ra)
+            #print("P_act_arr_ra:",P_act_arr_ra)
+            # Generate individual revenues assuming equiprobable scenarios
+            if "FCR-D" in self.markets:
+                rev_FCR_D_ra[i] = (self.lambda_Stc_FCR_D_up_full.mean(axis=0) * c_up_arr_ra + self.lambda_Stc_FCR_D_dn_full.mean(axis=0) * c_dn_arr_ra).sum()
+            else:
+                rev_FCR_D_ra[i] = (np.zeros(len(P_DA_arr_ra))).sum()
+            rev_DA_ra[i] = (self.lambda_Stc_DA_full.mean(axis=0) * (P_DA_arr_ra / self.n_DA)).sum()
+            rev_IM_ra[i] = (self.lambda_Stc_im_full * ((P_act_arr_ra - P_DA_arr_ra) / self.n_im)).mean(axis=0).sum()
+            #print("rev_FCR_D_ra[i]:",rev_FCR_D_ra[i])
+            #print("rev_DA_ra[i]:",rev_DA_ra[i])
+            self.PnL_ra[i] = rev_FCR_D_ra[i] + rev_DA_ra[i] + rev_IM_ra[i]
+
+            self.CVaR_arr[i] = ( zeta_arr_ra - (1/(1-self.alpha_risk)) * (nu_arr_ra.mean(axis=1)) ).sum()
+        
+        # Reset to original
+        self.beta_risk = beta_risk_original
+
+        # Clip extreme -ve values
+        np.clip(self.CVaR_arr,a_min=0,a_max=None)
+        
+        return #PnL_ra, CVaR_arr
+
+    def plot_risk(self):
+        """
+        Scatter plot of Expected Profit vs CVaR (efficiency frontier),
+        color-coded by beta in a single-hue gradient from 0 to 1.
+        Excludes beta = 0 points (pathological CVaR).
+        """
+
+        # Run the risk analysis function
+        self.risk_analysis()
+
+        beta = np.asarray(self.beta_arr)
+        pnl  = np.asarray(self.PnL_ra)
+        cvar = np.asarray(self.CVaR_arr)
+
+        # --- Basic sanity checks ---
+        assert beta.shape == pnl.shape == cvar.shape, \
+            "beta_arr, PnL_ra, and CVaR_arr must have the same shape"
+
+        # --- Mask out beta = 0 (pathological CVaR ≈ -1e20) ---
+        mask = beta > 0
+
+        beta = beta[mask]
+        pnl  = pnl[mask]
+        cvar = cvar[mask]
+
+        # --- Create figure ---
+        plt.figure(figsize=(7, 5))
+
+        # Scatter with single-hue gradient
+        sc = plt.scatter(
+            cvar,
+            pnl,
+            c=beta,
+            cmap="Blues",        # single-hue colormap
+            s=60,
+            edgecolor="black",
+            linewidth=0.5,
+            alpha=0.9
+        )
+
+        # Connect points to emphasize the frontier shape
+        plt.plot(cvar, pnl, color="gray", alpha=0.4, linewidth=1.2)
+
+        # Colorbar for beta
+        cbar = plt.colorbar(sc)
+        cbar.set_label("Tuning parameter β", fontsize=11)
+
+        # Labels and title
+        plt.xlabel("CVaR (Risk)", fontsize=11)
+        plt.ylabel("Expected Profit (PnL)", fontsize=11)
+        plt.title("Risk–Return Efficiency Frontier (β > 0)", fontsize=12)
+
+        # Grid + layout
+        plt.grid(True, alpha=0.3)
+        # Show plot
+        plt.tight_layout()
+        plt.savefig("risk_result_illustration_example", dpi=500)
         return plt.gcf()
 
 
@@ -786,7 +958,10 @@ pn.extension('bokeh')
 status_text = pn.pane.Markdown("#### ⚙️ Waiting for input...")
 solve_status = pn.pane.Markdown("")
 revenue_text = pn.pane.Markdown("")
-plot_pane = pn.pane.Matplotlib(sizing_mode="stretch_width")
+mode_status = pn.pane.Markdown("")
+plot_pane_main = pn.pane.Matplotlib(sizing_mode="stretch_width")
+plot_pane_risk = pn.pane.Matplotlib(sizing_mode="stretch_width")
+plot_pane_risk.visible = False
 plot_button = None
 
 # ---------------------------------------------------------------------
@@ -823,9 +998,80 @@ scenario_slider = pnw.IntSlider(
     name="Number of Scenarios (W)", start=5, end=100, value=10, visible=False
 )
 
+# --- Advanced stochastic options (hidden by default) ---
+solution_mode = pnw.Select(
+    name="Solution Mode",
+    options=["Standard", "Ex-post Quality", "Risk Analysis"],
+    value="Standard",
+    visible=False
+)
+
+alpha_slider = pnw.IntSlider(
+    name="CVaR Confidence Level α (%)",
+    start=0, end=100, step=10, value=90, visible=False
+)
+
+beta_slider = pnw.FloatSlider(
+    name="Risk Aversion β",
+    start=0.0, end=1.0, step=0.1, value=0.5, visible=False
+)
+
+row2b = pn.Row(solution_mode, alpha_slider, beta_slider)
+row2b.visible = False
+
 @pn.depends(scheme_button, watch=True)
 def update_scenario_visibility(scheme):
-    scenario_slider.visible = (scheme == "Stochastic")
+    is_stoch = (scheme == "Stochastic")
+    scenario_slider.visible = is_stoch
+    solution_mode.visible = is_stoch
+    row2b.visible = is_stoch
+
+    # Reset advanced options when leaving stochastic
+    if not is_stoch:
+        solution_mode.value = "Standard"
+        alpha_slider.visible = False
+        beta_slider.visible = False
+
+        plot_pane_risk.visible = False
+        plot_pane_risk.object = None
+
+        # Reset solve flags
+        global solve_quality, solve_risk, alpha_risk, beta_risk
+        solve_quality = False
+        solve_risk = False
+        alpha_risk = 1
+        beta_risk = 0
+
+
+@pn.depends(solution_mode, watch=True)
+def update_risk_controls(mode):
+    if mode == "Risk Analysis":
+        alpha_slider.visible = True
+        beta_slider.visible = True
+    else:
+        alpha_slider.visible = False
+        beta_slider.visible = False
+
+@pn.depends(solution_mode, alpha_slider, beta_slider, watch=True)
+def update_solve_flags(mode, alpha, beta):
+    global solve_quality, solve_risk, alpha_risk, beta_risk
+
+    # Reset defaults
+    solve_quality = False
+    solve_risk = False
+    alpha_risk = 1
+    beta_risk = 0
+
+    if mode == "Ex-post Quality":
+        solve_quality = True
+
+    elif mode == "Risk Analysis":
+        solve_risk = True
+        alpha_risk = alpha / 100.0   # convert % → [0,1]
+        beta_risk = beta
+    
+    plot_pane_risk.visible = False
+    plot_pane_risk.object = None
 
 row2 = pn.Row(markets_button, scheme_button, scenario_slider)
 
@@ -864,7 +1110,11 @@ def toggle_additional_params(toggle):
 load_button = pnw.Button(name="Load Data", button_type="primary")
 
 trade = None  # placeholder for the BESS_trading_strategy object
-
+# --- Internal flags for solve options ---
+solve_quality = False
+solve_risk = False
+alpha_risk = 1
+beta_risk = 0
 
 def load_data(event):
     global trade
@@ -902,13 +1152,10 @@ def load_data(event):
 # --- 6. Solve Button (appears after Load)
 # ---------------------------------------------------------------------
 solve_button = pnw.Button(name="Solve Optimization", button_type="success")
-quality_checkbox = pnw.Checkbox(name="Perform ex-post out-of-sample analysis", value=False, visible=False)
 plot_button = pnw.Button(name="Plot Results", button_type="primary", visible=False)
 
 def show_solve_section():
     solve_button.visible = True
-    quality_checkbox.visible = (scheme_button.value == "Stochastic")
-
 
 def run_solve(event):
     if trade is None:
@@ -917,10 +1164,12 @@ def run_solve(event):
 
     solve_status.object = "🧩 Solving optimization..."
     try:
-        if quality_checkbox.value:
-            trade.solve(quality=True)
-        else:
-            trade.solve()
+        trade.solve(
+            quality=solve_quality,
+            risk=solve_risk,
+            alpha_risk=alpha_risk,
+            beta_risk=beta_risk
+        )
         solve_status.object = "✅ Optimization complete."
         #rev = trade.revenue()
         revenue_text.object = trade.revenue()
@@ -928,15 +1177,22 @@ def run_solve(event):
     except Exception as e:
         solve_status.object = f"❌ Error during solve: `{e}`"
 
-
 def run_plot(event):
     if trade is not None:
-        #trade.plot()
-        fig = trade.plot()          # get matplotlib figure
-        plot_pane.object = fig      # render inside Panel
+        fig = trade.plot()
+        plot_pane_main.object = fig
+
+        # Only plot risk results if Risk Analysis was selected
+        if solve_risk:
+            fig_risk = trade.plot_risk()
+            plot_pane_risk.object = fig_risk
+            plot_pane_risk.visible = True
+        else:
+            plot_pane_risk.object = None
+            plot_pane_risk.visible = False
+
     else:
         solve_status.object = "⚠️ Load and solve before plotting."
-
 
 load_button.on_click(load_data)
 solve_button.on_click(run_solve)
@@ -944,7 +1200,6 @@ plot_button.on_click(run_plot)
 
 # Initially hidden
 solve_button.visible = False
-quality_checkbox.visible = False
 plot_button.visible = False
 
 # ---------------------------------------------------------------------
@@ -954,17 +1209,18 @@ dashboard = pn.Column(
     pn.pane.Markdown("## ⚙️ BESS Trading Strategy - Interactive Dashboard"),
     row1,
     row2,
+    row2b,
     asset_title,
     row3,
     additional_params_expander,
     row4,
     pn.Row(load_button),
     status_text,
-    pn.Row(solve_button, quality_checkbox),
+    pn.Row(solve_button),
     solve_status,
     revenue_text,
     plot_button,
-    plot_pane
+    pn.Column(plot_pane_main, plot_pane_risk),
 )
 
 dashboard.servable()

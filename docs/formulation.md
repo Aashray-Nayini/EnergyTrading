@@ -28,6 +28,8 @@ Mathematical Formulation
 | $\overline{R}$ | Maximum power rating | MW |
 | $\overline{FCR}$ | Maximum FCR fraction of storage capacity | %/100 |
 | ${SOC}_{i}$ | Initial state of charge (MWh) | MWh |
+| $\alpha$ | Confidence level or percentile | %/100 |
+| $\beta$ | Risk-awareness parameter (0 to 1) | - |
 
 ---
 
@@ -43,18 +45,26 @@ Mathematical Formulation
 | $I_{t,\omega}^{B}$ | Imbalance settlement income at period $t$, scenario $\omega$ | € |
 | $y_{t,\omega}^{↑}$ | Binary variable for FCD-D up violation (1 for violation)| - |
 | $y_{t,\omega}^{↓}$ | Binary variable for FCD-D down violation (1 for violation)| - |
+| $\theta_{\omega}$ | Binary variable of considering scenario $\omega$ for VaR calculation (0 if considered)| € |
+| $\zeta$ | Risk measure based on Value at Risk (VaR) | € |
+| $\nu_{\omega}$ | Revenue shortfall from VaR in the scenario $\omega$| € |
+| $Z^{risk-neutral}_{\omega}$ | Risk-neutral total revenue of scenario $\omega$ | € |
 
 ---
 
 ### FCR-D-up + FCR-D-down + DA markets with imbalance settlement
 
-In this strategy the price of the trade is fixed to be 0 EUR/MW and 0 EUR/MWh in ancillary services and day-ahead markets respectively. The quantities will be defined by the optmization problem: 
+In this strategy the price of the trade is fixed to be 0 EUR/MW and 0 EUR/MWh in ancillary services and day-ahead markets respectively. The quantities will be calculated by this optmization problem. The second term in the objective function corresponds to Conditional Value-at-Risk (CVaR): 
 
 $$
-\max ~~~~~~ \dfrac{1}{\#\omega} \sum_{t} \sum_{\omega} \left( \lambda_{t,\omega}^{FCR-D↑} c_{t}^{↑} + \lambda_{t,\omega}^{FCR-D↓} c_{t}^{↓} + \lambda_{t,\omega}^{DA} \dfrac{P_{t}^{DA}}{n} + I_{t,\omega}^{B} \right)
+\max ~~~~~~ (1-\beta) \dfrac{1}{\#\omega} \sum_{\omega} Z^{risk-neutral}_{\omega}  + \beta \left(\zeta - \dfrac{1}{(1-\alpha) \#\omega} \sum_{\omega} \nu_{\omega}\right)
 $$
 
 s.t.,  
+
+$$
+Z^{risk-neutral}_{\omega} =  \sum_{t} \left( \lambda_{t,\omega}^{FCR-D↑} c_{t}^{↑} + \lambda_{t,\omega}^{FCR-D↓} c_{t}^{↓} + \lambda_{t,\omega}^{DA} \dfrac{P_{t}^{DA}}{n} + I_{t,\omega}^{B} \right) \quad \forall \omega
+$$
 
 $$
 I_{t,\omega}^{B} =
@@ -121,6 +131,24 @@ $$
 y_{t,\omega}^{↑}, y_{t,\omega}^{↓} \in \{0,1\} \quad \forall t,\omega
 $$
 
+Risk Parameters:
+
+$$
+\dfrac{1}{\#\omega} \sum_{\omega} \theta_{\omega} \le 1-\alpha 
+$$
+
+$$
+\zeta \le Z^{risk-neutral}_{\omega} + M\theta_{\omega} \quad \forall \omega
+$$
+
+$$
+\nu_{\omega} \ge 0 \quad \forall \omega
+$$
+
+$$
+\nu_{\omega} \ge \zeta - Z^{risk-neutral}_{\omega} \quad \forall \omega
+$$
+
 For France and Germany:
 
 $$
@@ -130,8 +158,6 @@ $$
 $$
 c_{t}^{↓} = c_{t'}^{↓} \quad \forall t = \{0,\tfrac{T}{6},\tfrac{2T}{6},\tfrac{3T}{6},\tfrac{4T}{6},\tfrac{5T}{6}\}, ~ t' = \{t+1,t+2,...,t+\tfrac{T}{6}-1\}
 $$
-
-
 
 ### Further Information and References
 
