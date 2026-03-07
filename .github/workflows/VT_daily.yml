@@ -57,10 +57,6 @@ jobs:
         echo "TIME_RUN=$(date +'%H:%M')" >> $GITHUB_ENV
         echo "DATE_TRADE=$(date -d 'yesterday' +'%Y-%m-%d')" >> $GITHUB_ENV
     
-    # Directory tree log
-    - name: List files
-        run: ls -R
-    
     # Upload results for inspection
     - name: Upload VT results
       uses: actions/upload-artifact@v4
