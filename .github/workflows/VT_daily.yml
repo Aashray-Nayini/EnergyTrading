@@ -2,8 +2,8 @@ name: VT Daily Run
 
 on:
   schedule:
-    - cron: '10 19 * * *'   # 07:00 UTC = 08:00 Paris (CET)
-  workflow_dispatch:
+    - cron: '45 20 * * *'   # 07:00 UTC = 08:00 Paris (CET)
+  # workflow_dispatch:
 
 jobs:
   run-vt:
@@ -58,12 +58,12 @@ jobs:
         echo "DATE_TRADE=$(date -d 'yesterday' +'%Y-%m-%d')" >> $GITHUB_ENV
     
     # Upload results for inspection
-    - name: Upload VT results
-      uses: actions/upload-artifact@v4
-      with:
-        name: VT-results
-        path: VT/VT_results/
-        retention-days: 5
+    # - name: Upload VT results
+    #   uses: actions/upload-artifact@v4
+    #   with:
+    #     name: VT-results
+    #     path: VT/VT_results/
+    #     retention-days: 5
 
     # Commit results back to repo
     - name: Commit results
