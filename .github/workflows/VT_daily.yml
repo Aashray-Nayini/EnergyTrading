@@ -1,0 +1,80 @@
+name: VT Daily Run
+
+on:
+  schedule:
+    - cron: '00 18 * * *'   # 07:00 UTC = 08:00 Paris (CET)
+  workflow_dispatch:
+
+jobs:
+  run-vt:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+    # Checkout repo
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Setup Python
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    # Cache pip dependencies
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    # Install dependencies
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # Run strategies
+    - name: Run Alice
+      run: python VT/VT.py Alice
+
+    - name: Run Bob
+      run: python VT/VT.py Bob
+
+    - name: Run Charlie
+      run: python VT/VT.py Charlie
+
+    - name: Run Dennis
+      run: python VT/VT.py Dennis
+
+    # Generate timestamps
+    - name: Generate timestamps
+      run: |
+        echo "DATE_RUN=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+        echo "TIME_RUN=$(date +'%H:%M')" >> $GITHUB_ENV
+        echo "DATE_TRADE=$(date -d 'yesterday' +'%Y-%m-%d')" >> $GITHUB_ENV
+    
+    # Directory tree log
+    - name: List files
+        run: ls -R
+    
+    # Upload results for inspection
+    - name: Upload VT results
+      uses: actions/upload-artifact@v4
+      with:
+        name: VT-results
+        path: VT/VT_results/
+        retention-days: 5
+
+    # Commit results back to repo
+    # - name: Commit results
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "actions@github.com"
+
+    #     git add VT/VT_results/*
+    #     git commit -m "VT run for $DATE_TRADE on $DATE_RUN at $TIME_RUN" || echo "No changes"
+    #     git push

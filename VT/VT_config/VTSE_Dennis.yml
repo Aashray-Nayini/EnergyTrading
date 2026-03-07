@@ -1,0 +1,19 @@
+### ALICE - Virtual Trader Configuration Setup (VTSE)
+
+# Asset Parameters
+SOC_max: 10                                 # MWh - Max Capacity
+R_max: 10                                   # MW - Max Power
+SOC_i: 3                                    # MWh - Initial state of charge
+FCR_max: 0.8                                # %of SOC_max - Maximum allowable FCR bid
+
+# Market
+country: "FR"                               # Country string
+scheme: "Stochastic"                        # Optimization scheme 
+W: 100                                      # Number of scenarios
+markets: "DA with imbalance"                # Markets to participate in
+
+# Solution Mode (for Stochastic scheme)
+quality: True                               # bool - Ex-post Out-of-Sample Analysis
+risk: False                                 # bool - Risk Analysis
+alpha_risk: 0.9                             # %/100 - CVaR Confidence Level α
+beta_risk: 0.4                              # Risk Aversion β
