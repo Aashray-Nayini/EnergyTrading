@@ -2,7 +2,7 @@ name: VT Daily Run
 
 on:
   schedule:
-    - cron: '45 20 * * *'   # 07:00 UTC = 08:00 Paris (CET)
+    - cron: '45 6 * * *'   # 06:45 UTC = 07:45 Paris (CET)
   # workflow_dispatch:
 
 jobs:
@@ -56,14 +56,6 @@ jobs:
         echo "DATE_RUN=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
         echo "TIME_RUN=$(date +'%H:%M')" >> $GITHUB_ENV
         echo "DATE_TRADE=$(date -d 'yesterday' +'%Y-%m-%d')" >> $GITHUB_ENV
-    
-    # Upload results for inspection
-    # - name: Upload VT results
-    #   uses: actions/upload-artifact@v4
-    #   with:
-    #     name: VT-results
-    #     path: VT/VT_results/
-    #     retention-days: 5
 
     # Commit results back to repo
     - name: Commit results
@@ -72,5 +64,5 @@ jobs:
         git config --global user.email "actions@github.com"
 
         git add VT/VT_results/*
-        git commit -m "VT run for $DATE_TRADE on $DATE_RUN at $TIME_RUN" || echo "No changes"
+        git commit -m "VT run for $DATE_TRADE" || echo "No changes"
         git push
