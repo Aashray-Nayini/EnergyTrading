@@ -124,34 +124,92 @@ class BESS_trading_strategy:
         # load in essential parameters
         self.essential_param()
 
+    def has_missing_timestamps(self, df: pd.DataFrame) -> bool:
+        """
+        Check if dataframe has missing timestamps.
+        """
+        # Detect frequency from existing data
+        freq = pd.infer_freq(df.index)
+
+        # If frequency cannot be inferred, estimate from smallest step
+        if freq is None:
+            freq = (df.index[1:] - df.index[:-1]).min()
+
+        expected_len = len(pd.date_range(df.index.min(), df.index.max(), freq=freq))
+
+        return len(df) != expected_len
+    
+    def fill_missing_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add missing timestamps to a time-indexed dataframe and linearly interpolate values.
+        Works for any constant time frequency.
+        """
+        # Detect frequency from existing data
+        freq = pd.infer_freq(df.index)
+
+        # If frequency cannot be inferred, estimate from smallest step
+        if freq is None:
+            freq = (df.index[1:] - df.index[:-1]).min()
+
+        # Create full index
+        full_index = pd.date_range(start=df.index.min(), end=df.index.max(), freq=freq)
+
+        # Reindex and interpolate
+        df_filled = df.reindex(full_index).interpolate(method="time")
+
+        return df_filled
+
     def essential_param(self):
         # Initializing other parameters
         # FCR-D Prices (EUR/MW)
         df_lambda_FCR_D_up = getPriceFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
         df_lambda_FCR_D_dn = getPriceFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
+        # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
+        if self.has_missing_timestamps(df_lambda_FCR_D_up):
+            df_lambda_FCR_D_up = self.fill_missing_timestamps(df_lambda_FCR_D_up)
+        if self.has_missing_timestamps(df_lambda_FCR_D_dn):
+            df_lambda_FCR_D_dn = self.fill_missing_timestamps(df_lambda_FCR_D_dn)
 
         # FCR-D Volume contracted (MW)
-        self.df_volcon_FCR_D_up = getVolumeFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
-        self.df_volcon_FCR_D_dn = getVolumeFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
+        df_volcon_FCR_D_up = getVolumeFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
+        df_volcon_FCR_D_dn = getVolumeFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
+        # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
+        if self.has_missing_timestamps(df_volcon_FCR_D_up):
+            df_volcon_FCR_D_up = self.fill_missing_timestamps(df_volcon_FCR_D_up)
+        if self.has_missing_timestamps(df_volcon_FCR_D_dn):
+            df_volcon_FCR_D_dn = self.fill_missing_timestamps(df_volcon_FCR_D_dn)
 
         # FCR-D Volume activated (MW)
         try:
-            self.df_volact_FCR_D_up = getVolumeFCR_activation(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Up"]
+            df_volact_FCR_D_up = getVolumeFCR_activation(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Up"]
         except HTTPError: 
             print("Activated up volume data cannot be extracted (replacing with 5% of contracted values)")
-            self.df_volact_FCR_D_up = 0.05 * self.df_volcon_FCR_D_up
+            df_volact_FCR_D_up = 0.05 * df_volcon_FCR_D_up
         try:
-            self.df_volact_FCR_D_dn = getVolumeFCR_activation(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Down"]
+            df_volact_FCR_D_dn = getVolumeFCR_activation(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Down"]
         except HTTPError: 
             print("Activated down volume data cannot be extracted (replacing with 5% of contracted values)")
-            self.df_volact_FCR_D_dn = 0.05 * self.df_volcon_FCR_D_dn
+            df_volact_FCR_D_dn = 0.05 * df_volcon_FCR_D_dn
+        # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
+        if self.has_missing_timestamps(df_volact_FCR_D_up):
+            df_volact_FCR_D_up = self.fill_missing_timestamps(df_volact_FCR_D_up)
+        if self.has_missing_timestamps(df_volact_FCR_D_dn):
+            df_volact_FCR_D_dn = self.fill_missing_timestamps(df_volact_FCR_D_dn)
     
         # Imbalance Prices (EUR/MWh)
         df_lambda_up = getPriceIM(country='FR', start=pd.Timestamp(self.start_date, tz="Europe/Paris"), end=pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Short"]
         df_lambda_dn = getPriceIM(country='FR', start=pd.Timestamp(self.start_date, tz="Europe/Paris"), end=pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Long"]
+        # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
+        if self.has_missing_timestamps(df_lambda_up):
+            df_lambda_up = self.fill_missing_timestamps(df_lambda_up)
+        if self.has_missing_timestamps(df_lambda_dn):
+            df_lambda_dn = self.fill_missing_timestamps(df_lambda_dn)
 
         # DA Prices (EUR/MWh)
         df_lambda_DA = getPriceDA(country='FR', start=pd.Timestamp(self.start_date, tz="Europe/Paris"), end=pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["day-ahead"].loc[self.start_date: self.end_date]
+        # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
+        if self.has_missing_timestamps(df_lambda_DA):
+            df_lambda_DA = self.fill_missing_timestamps(df_lambda_DA)
 
         # Downsample (be linear interpolation) the DA prices to 15-mins (applies to befre 1st Oct 2025)
         df_fixed_list = []
@@ -169,7 +227,6 @@ class BESS_trading_strategy:
         # Concatenate all daily segments back together
         df_lambda_DA = pd.concat(df_fixed_list).sort_index()
 
-
         # Big M
         self.M = 100000000
         
@@ -185,8 +242,8 @@ class BESS_trading_strategy:
         self.k = 0.2 # % of W
 
         # Get numpy array of ratio of activated volume to the contracted volume
-        self.r_up_full = (self.df_volact_FCR_D_up/self.df_volcon_FCR_D_up).to_numpy().ravel()
-        self.r_dn_full = (self.df_volact_FCR_D_dn/self.df_volcon_FCR_D_dn).to_numpy().ravel()
+        self.r_up_full = (df_volact_FCR_D_up/df_volcon_FCR_D_up).to_numpy().ravel()
+        self.r_dn_full = (df_volact_FCR_D_dn/df_volcon_FCR_D_dn).to_numpy().ravel()
 
         # Convert prices to np array
         self.lambda_FCR_D_up_full = df_lambda_FCR_D_up.to_numpy().ravel()
@@ -944,7 +1001,7 @@ class BESS_trading_strategy:
         plt.grid(True, alpha=0.3)
         # Show plot
         plt.tight_layout()
-        plt.savefig("risk_result_illustration_example", dpi=500)
+        #plt.savefig("risk_result_illustration_example", dpi=500)
         return plt.gcf()
 
 
