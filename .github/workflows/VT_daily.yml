@@ -3,7 +3,7 @@ name: VT Daily Run
 on:
   schedule:
     - cron: '45 6 * * *'   # 06:45 UTC = 07:45 Paris (CET)
-  # workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
   run-vt:
