@@ -1,112 +1,23 @@
-# Import packages
+from .entsoe import EntsoeData
+from .utils import next_day_str, date_hour_formatter
 import pandas as pd
-from dotenv import load_dotenv
-import os
-from ortools.linear_solver import pywraplp
-from entsoe import EntsoePandasClient
+from requests.exceptions import HTTPError
 import numpy as np
-from datetime import datetime, timedelta, date
+from sklearn.model_selection import KFold
+from ortools.linear_solver import pywraplp
 import matplotlib.pyplot as plt
 import matplotlib.dates as md
 from matplotlib.ticker import FuncFormatter
-from sklearn.model_selection import KFold
-import panel as pn
-import panel.widgets as pnw
-from requests.exceptions import HTTPError
 
-load_dotenv()  # loads .env into environment variables
-API_KEY_ENTSOE = os.getenv("API_KEY_ENTSOE")
 
-# Initialize the request protocol
-CLIENT = EntsoePandasClient(api_key=API_KEY_ENTSOE)
-
-# Function to print out next day in string
-def next_day_str(date_str: str) -> str:
-    """
-    Given a date string in 'YYYY-MM-DD' format, return the next day's date string.
-    Example: '2025-10-02' -> '2025-10-03'
-    """
-    return (datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-
-# Function to make x-ticks for the plots
-def date_hour_formatter(x, pos):
-    dt = md.num2date(x)
-    if dt.hour == 0:
-        return dt.strftime("%d %b")
-    return dt.strftime("%H:%M")
-
-# Functions to acces the market data
-def getPriceDA(country='FR', start=pd.Timestamp("2025-10-11", tz="Europe/Paris"), end=pd.Timestamp("2025-10-12", tz="Europe/Paris")):
-    df = pd.DataFrame(CLIENT.query_day_ahead_prices(
-        country_code=country,
-        start=start,
-        end=end,
-    ))
-    df.columns = ['day-ahead']
-    return df
-
-def getPriceIM(country='FR', start=pd.Timestamp("2025-10-11", tz="Europe/Paris"), end=pd.Timestamp("2025-10-12", tz="Europe/Paris")):
-    df = pd.DataFrame(CLIENT.query_imbalance_prices(
-        country_code=country,
-        start=start,
-        end=end,
-        psr_type=None,
-    ))
-    return df
-
-def getPriceFCR_contracted(country='FR', start=pd.Timestamp("2025-10-11", tz="Europe/Paris"), end=pd.Timestamp("2025-10-12", tz="Europe/Paris")):
-    df = pd.DataFrame(CLIENT.query_contracted_reserve_prices(
-        country_code=country,
-        process_type = "A52",
-        type_marketagreement_type = "A01",
-        start=start,
-        end=end,
-        psr_type=None,
-    ))
-    return df["Symmetric"]
-
-def getVolumeFCR_contracted(country='FR', start=pd.Timestamp("2025-10-11", tz="Europe/Paris"), end=pd.Timestamp("2025-10-12", tz="Europe/Paris")):
-    df = pd.DataFrame(CLIENT.query_contracted_reserve_amount(
-        country_code=country,
-        process_type = "A52",
-        type_marketagreement_type = "A01",
-        start=start,
-        end=end,
-        psr_type=None,
-    ))
-    return df["Symmetric"]
-
-def getVolumeFCR_activation(country='FR', start=pd.Timestamp("2025-10-11", tz="Europe/Paris"), end=pd.Timestamp("2025-10-12", tz="Europe/Paris")):
-    df = pd.DataFrame(CLIENT.query_activated_balancing_energy(
-        country_code=country,
-        start=start,
-        end=end,
-        business_type = "A95",
-        psr_type=None,
-    ))
-    df.columns = df.columns.droplevel()
-    return df
-
-def getPriceFCR_activation(country='FR', start=pd.Timestamp("2025-10-11", tz="Europe/Paris"), end=pd.Timestamp("2025-10-12", tz="Europe/Paris")):
-    df = pd.DataFrame(CLIENT.query_activated_balancing_energy_prices(
-        country_code=country,
-        start=start,
-        end=end,
-        process_type='A16',
-        psr_type=None,
-        business_type = "A95",
-        standard_market_product=None, 
-        original_market_product=None,
-    ))
-    return df
-
-# BESS trading strategy class 
+# BESS trading strategy class
 class BESS_trading_strategy:
 
-    def __init__(self, SOC_max: float, R_max: float, SOC_i: float = 0, FCR_max: float = 0.8, 
+    def __init__(self, CLIENT, SOC_max: float, R_max: float, SOC_i: float = 0, FCR_max: float = 0.8, 
                  scheme: str = "Deterministic", W: int = 1,
                  markets: str = "FCR-D + DA with imbalance", country: str = "FR", 
                  start_date: str = "2025-10-11", end_date: str = "2025-10-11"):
+        self.CLIENT = CLIENT
         self.SOC_max = SOC_max
         self.R_max = R_max
         self.SOC_i = SOC_i
@@ -121,9 +32,12 @@ class BESS_trading_strategy:
         # Initialize solve status
         self.solve_status = "Not solved yet"
 
+        # Create Entso-E data instance
+        self.data_entsoe = EntsoeData(self.CLIENT, self.country, self.start_date, next_day_str(self.end_date))
+
         # load in essential parameters
         self.essential_param()
-
+    
     def has_missing_timestamps(self, df: pd.DataFrame) -> bool:
         """
         Check if dataframe has missing timestamps.
@@ -162,8 +76,8 @@ class BESS_trading_strategy:
     def essential_param(self):
         # Initializing other parameters
         # FCR-D Prices (EUR/MW)
-        df_lambda_FCR_D_up = getPriceFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
-        df_lambda_FCR_D_dn = getPriceFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
+        df_lambda_FCR_D_up = self.data_entsoe.getPriceFCR_contracted()
+        df_lambda_FCR_D_dn = self.data_entsoe.getPriceFCR_contracted()
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
         if self.has_missing_timestamps(df_lambda_FCR_D_up):
             df_lambda_FCR_D_up = self.fill_missing_timestamps(df_lambda_FCR_D_up)
@@ -171,8 +85,8 @@ class BESS_trading_strategy:
             df_lambda_FCR_D_dn = self.fill_missing_timestamps(df_lambda_FCR_D_dn)
 
         # FCR-D Volume contracted (MW)
-        df_volcon_FCR_D_up = getVolumeFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
-        df_volcon_FCR_D_dn = getVolumeFCR_contracted(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))
+        df_volcon_FCR_D_up = self.data_entsoe.getVolumeFCR_contracted()
+        df_volcon_FCR_D_dn = self.data_entsoe.getVolumeFCR_contracted()
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
         if self.has_missing_timestamps(df_volcon_FCR_D_up):
             df_volcon_FCR_D_up = self.fill_missing_timestamps(df_volcon_FCR_D_up)
@@ -181,12 +95,12 @@ class BESS_trading_strategy:
 
         # FCR-D Volume activated (MW)
         try:
-            df_volact_FCR_D_up = getVolumeFCR_activation(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Up"]
+            df_volact_FCR_D_up = self.data_entsoe.getVolumeFCR_activation()["Up"]
         except HTTPError: 
             print("Activated up volume data cannot be extracted (replacing with 5% of contracted values)")
             df_volact_FCR_D_up = 0.05 * df_volcon_FCR_D_up
         try:
-            df_volact_FCR_D_dn = getVolumeFCR_activation(country = 'FR', start = pd.Timestamp(self.start_date, tz="Europe/Paris"), end = pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Down"]
+            df_volact_FCR_D_dn = self.data_entsoe.getVolumeFCR_activation()["Down"]
         except HTTPError: 
             print("Activated down volume data cannot be extracted (replacing with 5% of contracted values)")
             df_volact_FCR_D_dn = 0.05 * df_volcon_FCR_D_dn
@@ -197,8 +111,8 @@ class BESS_trading_strategy:
             df_volact_FCR_D_dn = self.fill_missing_timestamps(df_volact_FCR_D_dn)
     
         # Imbalance Prices (EUR/MWh)
-        df_lambda_up = getPriceIM(country='FR', start=pd.Timestamp(self.start_date, tz="Europe/Paris"), end=pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Short"]
-        df_lambda_dn = getPriceIM(country='FR', start=pd.Timestamp(self.start_date, tz="Europe/Paris"), end=pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["Long"]
+        df_lambda_up = self.data_entsoe.getPriceIM()["Short"]
+        df_lambda_dn = self.data_entsoe.getPriceIM()["Long"]
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
         if self.has_missing_timestamps(df_lambda_up):
             df_lambda_up = self.fill_missing_timestamps(df_lambda_up)
@@ -206,7 +120,7 @@ class BESS_trading_strategy:
             df_lambda_dn = self.fill_missing_timestamps(df_lambda_dn)
 
         # DA Prices (EUR/MWh)
-        df_lambda_DA = getPriceDA(country='FR', start=pd.Timestamp(self.start_date, tz="Europe/Paris"), end=pd.Timestamp(next_day_str(self.end_date), tz="Europe/Paris"))["day-ahead"].loc[self.start_date: self.end_date]
+        df_lambda_DA = self.data_entsoe.getPriceDA()["day-ahead"].loc[self.start_date: self.end_date]
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
         if self.has_missing_timestamps(df_lambda_DA):
             df_lambda_DA = self.fill_missing_timestamps(df_lambda_DA)
@@ -1003,285 +917,3 @@ class BESS_trading_strategy:
         plt.tight_layout()
         #plt.savefig("risk_result_illustration_example", dpi=500)
         return plt.gcf()
-
-
-# Trading Dashboard
-#pn.extension('tabulator', 'katex')
-pn.extension('bokeh')
-
-# ---------------------------------------------------------------------
-# --- Helper: initialization status and result messages
-# ---------------------------------------------------------------------
-status_text = pn.pane.Markdown("#### ⚙️ Waiting for input...")
-solve_status = pn.pane.Markdown("")
-revenue_text = pn.pane.Markdown("")
-mode_status = pn.pane.Markdown("")
-plot_pane_main = pn.pane.Matplotlib(sizing_mode="stretch_width")
-plot_pane_risk = pn.pane.Matplotlib(sizing_mode="stretch_width")
-plot_pane_risk.visible = False
-plot_button = None
-
-# ---------------------------------------------------------------------
-# --- 1. Top Row — General inputs
-# ---------------------------------------------------------------------
-country_display = pn.pane.Markdown("**Country:** 🇫🇷 France")
-
-start_date_picker = pnw.DatePicker(
-    name="Start Date", value=date(2025, 12, 25),
-    start=date(2024, 1, 1), end=date(2026, 12, 31)
-)
-end_date_picker = pnw.DatePicker(
-    name="End Date", value=date(2025, 12, 25),
-    start=date(2024, 1, 1), end=date(2026, 12, 31)
-)
-
-row1 = pn.Row(country_display, start_date_picker, end_date_picker)
-
-# ---------------------------------------------------------------------
-# --- 2. Markets and Scheme selection
-# ---------------------------------------------------------------------
-markets_button = pnw.RadioButtonGroup(
-    name="Markets", value="DA with imbalance",
-    options=["FCR-D + DA with imbalance", "DA with imbalance"]
-)
-
-scheme_button = pnw.RadioButtonGroup(
-    name="Scheme", value="Deterministic",
-    options=["Deterministic", "Stochastic"]
-)
-
-# If stochastic selected → show scenario slider
-scenario_slider = pnw.IntSlider(
-    name="Number of Scenarios (W)", start=5, end=100, value=10, visible=False
-)
-
-# --- Advanced stochastic options (hidden by default) ---
-solution_mode = pnw.Select(
-    name="Solution Mode",
-    options=["Standard", "Ex-post Quality", "Risk Analysis"],
-    value="Standard",
-    visible=False
-)
-
-alpha_slider = pnw.IntSlider(
-    name="CVaR Confidence Level α (%)",
-    start=0, end=100, step=10, value=90, visible=False
-)
-
-beta_slider = pnw.FloatSlider(
-    name="Risk Aversion β",
-    start=0.0, end=1.0, step=0.1, value=0.5, visible=False
-)
-
-row2b = pn.Row(solution_mode, alpha_slider, beta_slider)
-row2b.visible = False
-
-@pn.depends(scheme_button, watch=True)
-def update_scenario_visibility(scheme):
-    is_stoch = (scheme == "Stochastic")
-    scenario_slider.visible = is_stoch
-    solution_mode.visible = is_stoch
-    row2b.visible = is_stoch
-
-    # Reset advanced options when leaving stochastic
-    if not is_stoch:
-        solution_mode.value = "Standard"
-        alpha_slider.visible = False
-        beta_slider.visible = False
-
-        plot_pane_risk.visible = False
-        plot_pane_risk.object = None
-
-        # Reset solve flags
-        global solve_quality, solve_risk, alpha_risk, beta_risk
-        solve_quality = False
-        solve_risk = False
-        alpha_risk = 1
-        beta_risk = 0
-
-
-@pn.depends(solution_mode, watch=True)
-def update_risk_controls(mode):
-    if mode == "Risk Analysis":
-        alpha_slider.visible = True
-        beta_slider.visible = True
-    else:
-        alpha_slider.visible = False
-        beta_slider.visible = False
-
-@pn.depends(solution_mode, alpha_slider, beta_slider, watch=True)
-def update_solve_flags(mode, alpha, beta):
-    global solve_quality, solve_risk, alpha_risk, beta_risk
-
-    # Reset defaults
-    solve_quality = False
-    solve_risk = False
-    alpha_risk = 1
-    beta_risk = 0
-
-    if mode == "Ex-post Quality":
-        solve_quality = True
-
-    elif mode == "Risk Analysis":
-        solve_risk = True
-        alpha_risk = alpha / 100.0   # convert % → [0,1]
-        beta_risk = beta
-    
-    plot_pane_risk.visible = False
-    plot_pane_risk.object = None
-
-row2 = pn.Row(markets_button, scheme_button, scenario_slider)
-
-# ---------------------------------------------------------------------
-# --- 3. Asset parameters
-# ---------------------------------------------------------------------
-asset_title = pn.pane.Markdown("### ⚡ Asset Parameters")
-
-SOC_max_input = pnw.FloatInput(name="Storage Capacity (MWh)", value=20.0, step=0.1)
-R_max_input = pnw.FloatInput(name="Power Capacity (MW)", value=10.0, step=0.1)
-
-row3 = pn.Row(SOC_max_input, R_max_input)
-
-# ---------------------------------------------------------------------
-# --- 4. Additional parameters (hidden by default)
-# ---------------------------------------------------------------------
-additional_params_expander = pn.widgets.Toggle(name="Additional Parameters", value=False)
-
-FCR_max_input = pnw.FloatInput(name="Maximum allowable FCR bid (% of storage capacity)", value=80.0, step=1.0)
-SOC_i_input = pnw.FloatInput(name="Initial State-of-Charge (MWh)", value=0.0, step=0.1)
-
-eta_c_display = pn.pane.Markdown("η_charge = 100%")
-eta_d_display = pn.pane.Markdown("η_discharge = 100%")
-nu_deg_display = pn.pane.Markdown("ν_degradation = 0 EUR/MWh")
-
-row4 = pn.Row(FCR_max_input, SOC_i_input, eta_c_display, eta_d_display, nu_deg_display)
-row4.visible = False
-
-@pn.depends(additional_params_expander, watch=True)
-def toggle_additional_params(toggle):
-    row4.visible = toggle
-
-# ---------------------------------------------------------------------
-# --- 5. Load Button
-# ---------------------------------------------------------------------
-load_button = pnw.Button(name="Load Data", button_type="primary")
-
-trade = None  # placeholder for the BESS_trading_strategy object
-# --- Internal flags for solve options ---
-solve_quality = False
-solve_risk = False
-alpha_risk = 1
-beta_risk = 0
-
-def load_data(event):
-    global trade
-    start = start_date_picker.value
-    end = end_date_picker.value
-    #print(start)
-
-    if end < start:
-        status_text.object = "⚠️ **End date must be after start date. Please adjust.**"
-        return
-
-    status_text.object = "⏳ Loading data..."
-
-    try:
-        # Create instance
-        trade = BESS_trading_strategy(
-            SOC_max=SOC_max_input.value,
-            R_max=R_max_input.value,
-            SOC_i=SOC_i_input.value,
-            FCR_max=FCR_max_input.value / 100,
-            scheme=scheme_button.value,
-            W=scenario_slider.value,
-            markets=markets_button.value,
-            country="FR",
-            start_date=str(start),
-            end_date=str(end),
-        )
-        status_text.object = "✅ Data loaded successfully! Ready to solve."
-        show_solve_section()
-    except Exception as e:
-        status_text.object = f"❌ Error while loading: `{e}`"
-
-
-# ---------------------------------------------------------------------
-# --- 6. Solve Button (appears after Load)
-# ---------------------------------------------------------------------
-solve_button = pnw.Button(name="Solve Optimization", button_type="success")
-plot_button = pnw.Button(name="Plot Results", button_type="primary", visible=False)
-
-def show_solve_section():
-    solve_button.visible = True
-
-def run_solve(event):
-    if trade is None:
-        solve_status.object = "⚠️ Please load data first."
-        return
-
-    solve_status.object = "🧩 Solving optimization..."
-    try:
-        trade.solve(
-            quality=solve_quality,
-            risk=solve_risk,
-            alpha_risk=alpha_risk,
-            beta_risk=beta_risk
-        )
-        solve_status.object = "✅ Optimization complete."
-        #rev = trade.revenue()
-        revenue_text.object = trade.revenue()
-        plot_button.visible = True
-    except Exception as e:
-        solve_status.object = f"❌ Error during solve: `{e}`"
-
-def run_plot(event):
-    if trade is not None:
-        fig = trade.plot()
-        plot_pane_main.object = fig
-
-        # Only plot risk results if Risk Analysis was selected
-        if solve_risk:
-            fig_risk = trade.plot_risk()
-            plot_pane_risk.object = fig_risk
-            plot_pane_risk.visible = True
-        else:
-            plot_pane_risk.object = None
-            plot_pane_risk.visible = False
-
-    else:
-        solve_status.object = "⚠️ Load and solve before plotting."
-
-load_button.on_click(load_data)
-solve_button.on_click(run_solve)
-plot_button.on_click(run_plot)
-
-# Initially hidden
-solve_button.visible = False
-plot_button.visible = False
-
-# ---------------------------------------------------------------------
-# --- Combine all panels
-# ---------------------------------------------------------------------
-dashboard = pn.Column(
-    pn.pane.Markdown("## ⚙️ BESS Trading Strategy - Interactive Dashboard"),
-    row1,
-    row2,
-    row2b,
-    asset_title,
-    row3,
-    additional_params_expander,
-    row4,
-    pn.Row(load_button),
-    status_text,
-    pn.Row(solve_button),
-    solve_status,
-    revenue_text,
-    plot_button,
-    pn.Column(plot_pane_main, plot_pane_risk),
-)
-
-dashboard.servable()
-
-# If running as standalone script, open in browser
-if __name__ == "__main__":
-    pn.serve(dashboard)  # ✅ use your actual layout variable name

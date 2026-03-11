@@ -22,6 +22,9 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    env:
+      API_KEY_ENTSOE: ${{ secrets.API_KEY_ENTSOE }}
+
     steps:
 
     - name: Checkout repository
@@ -47,4 +50,4 @@ jobs:
 
     - name: Run model test
       run: |
-        python tests/test.py Alice
+        python -m tests.test Alice

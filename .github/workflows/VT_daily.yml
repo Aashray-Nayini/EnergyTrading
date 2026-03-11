@@ -10,6 +10,9 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    env:
+      API_KEY_ENTSOE: ${{ secrets.API_KEY_ENTSOE }}
+
     steps:
 
     # Checkout repo
@@ -39,16 +42,16 @@ jobs:
 
     # Run strategies
     - name: Run Alice
-      run: python VT/VT.py Alice
+      run: python -m VT.VT Alice
 
     - name: Run Bob
-      run: python VT/VT.py Bob
+      run: python -m VT.VT Bob
 
     - name: Run Charlie
-      run: python VT/VT.py Charlie
+      run: python -m VT.VT Charlie
 
     - name: Run Dennis
-      run: python VT/VT.py Dennis
+      run: python -m VT.VT Dennis
 
     # Generate timestamps
     - name: Generate timestamps
