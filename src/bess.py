@@ -37,41 +37,77 @@ class BESS_trading_strategy:
 
         # load in essential parameters
         self.essential_param()
-    
-    def has_missing_timestamps(self, df: pd.DataFrame) -> bool:
+
+    def ensure_complete_time_index(self, df: pd.DataFrame, rolling_hours: int = 2) -> pd.DataFrame:
         """
-        Check if dataframe has missing timestamps.
+        Ensure a time-indexed DataFrame has a complete set of timestamps.
+
+        - Detects missing timestamps (including gaps at the end of the day)
+        - Reconstructs a full datetime index based on inferred frequency
+        - Interpolates internal missing values using time interpolation
+        - Fills edge (start/end) missing values using rolling mean
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            DataFrame with DatetimeIndex
+        rolling_hours : int, default 2
+            Window (in hours) used for rolling mean edge filling
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with complete time index
         """
-        # Detect frequency from existing data
+
+        # Detect frequency
         freq = pd.infer_freq(df.index)
 
-        # If frequency cannot be inferred, estimate from smallest step
         if freq is None:
             freq = (df.index[1:] - df.index[:-1]).min()
 
-        expected_len = len(pd.date_range(df.index.min(), df.index.max(), freq=freq))
+        # Convert freq to Timedelta if needed
+        freq_td = pd.to_timedelta(freq)
 
-        return len(df) != expected_len
-    
-    def fill_missing_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Add missing timestamps to a time-indexed dataframe and linearly interpolate values.
-        Works for any constant time frequency.
-        """
-        # Detect frequency from existing data
-        freq = pd.infer_freq(df.index)
+        # Detect expected length per day
+        steps_per_day = int(pd.Timedelta("1D") / freq_td)
+        num_days = len(pd.unique(df.index.date))
 
-        # If frequency cannot be inferred, estimate from smallest step
-        if freq is None:
-            freq = (df.index[1:] - df.index[:-1]).min()
+        expected_len = steps_per_day * num_days
 
-        # Create full index
-        full_index = pd.date_range(start=df.index.min(), end=df.index.max(), freq=freq)
+        # If no missing timestamps → return early
+        if len(df) == expected_len:
+            return df
 
-        # Reindex and interpolate
-        df_filled = df.reindex(full_index).interpolate(method="time")
+        # Build full index (day-aligned)
+        full_index = pd.date_range(
+            start=df.index.min().floor("D"),
+            end=df.index.max().ceil("D") - freq_td,
+            freq=freq
+        )
 
-        return df_filled
+        # Reindex
+        df = df.reindex(full_index)
+
+        # Interpolate internal gaps
+        df = df.interpolate(method="time",limit_area="inside")
+
+        # Handle edge NaNs (start/end)
+        if df.isna().any().any():
+
+            window = int(pd.Timedelta(f"{rolling_hours}h") / freq_td)
+            print(window)
+
+            # Rolling mean fill
+            rolling_mean = df.rolling(window=window, min_periods=1).mean()
+
+            # Fill remaining NaNs using rolling mean
+            df = df.fillna(rolling_mean)
+
+            # Final fallback (just in case)
+            df = df.ffill().bfill()
+
+        return df
 
     def essential_param(self):
         # Initializing other parameters
@@ -79,19 +115,15 @@ class BESS_trading_strategy:
         df_lambda_FCR_D_up = self.data_entsoe.getPriceFCR_contracted()
         df_lambda_FCR_D_dn = self.data_entsoe.getPriceFCR_contracted()
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
-        if self.has_missing_timestamps(df_lambda_FCR_D_up):
-            df_lambda_FCR_D_up = self.fill_missing_timestamps(df_lambda_FCR_D_up)
-        if self.has_missing_timestamps(df_lambda_FCR_D_dn):
-            df_lambda_FCR_D_dn = self.fill_missing_timestamps(df_lambda_FCR_D_dn)
+        df_lambda_FCR_D_up = self.ensure_complete_time_index(df_lambda_FCR_D_up)
+        df_lambda_FCR_D_dn = self.ensure_complete_time_index(df_lambda_FCR_D_dn)
 
         # FCR-D Volume contracted (MW)
         df_volcon_FCR_D_up = self.data_entsoe.getVolumeFCR_contracted()
         df_volcon_FCR_D_dn = self.data_entsoe.getVolumeFCR_contracted()
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
-        if self.has_missing_timestamps(df_volcon_FCR_D_up):
-            df_volcon_FCR_D_up = self.fill_missing_timestamps(df_volcon_FCR_D_up)
-        if self.has_missing_timestamps(df_volcon_FCR_D_dn):
-            df_volcon_FCR_D_dn = self.fill_missing_timestamps(df_volcon_FCR_D_dn)
+        df_volcon_FCR_D_up = self.ensure_complete_time_index(df_volcon_FCR_D_up)
+        df_volcon_FCR_D_dn = self.ensure_complete_time_index(df_volcon_FCR_D_dn)
 
         # FCR-D Volume activated (MW)
         try:
@@ -105,25 +137,20 @@ class BESS_trading_strategy:
             print("Activated down volume data cannot be extracted (replacing with 5% of contracted values)")
             df_volact_FCR_D_dn = 0.05 * df_volcon_FCR_D_dn
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
-        if self.has_missing_timestamps(df_volact_FCR_D_up):
-            df_volact_FCR_D_up = self.fill_missing_timestamps(df_volact_FCR_D_up)
-        if self.has_missing_timestamps(df_volact_FCR_D_dn):
-            df_volact_FCR_D_dn = self.fill_missing_timestamps(df_volact_FCR_D_dn)
+        df_volact_FCR_D_up = self.ensure_complete_time_index(df_volact_FCR_D_up)
+        df_volact_FCR_D_dn = self.ensure_complete_time_index(df_volact_FCR_D_dn)
     
         # Imbalance Prices (EUR/MWh)
         df_lambda_up = self.data_entsoe.getPriceIM()["Short"]
         df_lambda_dn = self.data_entsoe.getPriceIM()["Long"]
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
-        if self.has_missing_timestamps(df_lambda_up):
-            df_lambda_up = self.fill_missing_timestamps(df_lambda_up)
-        if self.has_missing_timestamps(df_lambda_dn):
-            df_lambda_dn = self.fill_missing_timestamps(df_lambda_dn)
+        df_lambda_up = self.ensure_complete_time_index(df_lambda_up)
+        df_lambda_dn = self.ensure_complete_time_index(df_lambda_dn)
 
         # DA Prices (EUR/MWh)
         df_lambda_DA = self.data_entsoe.getPriceDA()["day-ahead"].loc[self.start_date: self.end_date]
         # Detect if the index has gaps. If so, reindex to a complete time range and interpolate
-        if self.has_missing_timestamps(df_lambda_DA):
-            df_lambda_DA = self.fill_missing_timestamps(df_lambda_DA)
+        df_lambda_DA = self.ensure_complete_time_index(df_lambda_DA)
 
         # Downsample (be linear interpolation) the DA prices to 15-mins (applies to befre 1st Oct 2025)
         df_fixed_list = []
